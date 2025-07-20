@@ -682,7 +682,9 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "برای دریافت هر فایل روی دکمه آن کلیک کنید:\n\n💡 برای حذف فایل، شماره آن را ارسال کنید.",
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
-    elif text == "📥 دریافت آخرین فایل":
+    # اگر دکمه «📥 دریافت آخرین فایل» زده شد، state را ریست کن و فقط منطق همین دکمه را اجرا کن
+    if text == "📥 دریافت آخرین فایل":
+        user_state["state"] = None
         files = load_files_db()
         if files:
             # بررسی محدودیت دانلود برای کاربران غیر ادمین
@@ -691,7 +693,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     remaining_time = get_remaining_time(user_id)
                     hours = int(remaining_time // 3600)
                     minutes = int((remaining_time % 3600) // 60)
-                    
                     await update.message.reply_text(
                         f"⏰ شما در 12 ساعت گذشته فایل دانلود کرده‌اید!\n"
                         f"⏳ زمان باقی‌مانده: {hours} ساعت و {minutes} دقیقه"
@@ -717,6 +718,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text(f"❌ خطا در ارسال فایل: {str(e)}")
         else:
             await update.message.reply_text("هیچ فایلی وجود ندارد.")
+        return
     elif text == "📊 وضعیت دانلود":
         users_db = load_users_db()
         user_id_str = str(user_id)
