@@ -266,6 +266,18 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     settings = load_settings()
     admins = load_admins()
 
+    # اگر یکی از دکمه‌های اصلی زده شد، state را ریست کن
+    main_menu_texts = [
+        "📤 ارسال فایل (فقط ادمین)",
+        "📁 لیست فایل‌ها",
+        "پنل مدیریت ⚙️",
+        "📥 دریافت آخرین فایل",
+        "📊 وضعیت دانلود",
+        "⬅️ بازگشت"
+    ]
+    if text in main_menu_texts and user_state.get("state"):
+        user_state["state"] = None
+
     # مدیریت پنل
     if text == "پنل مدیریت ⚙️" and (user_id == MAIN_ADMIN_ID or user_id in admins):
         if update.message:
@@ -685,23 +697,24 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         f"⏳ زمان باقی‌مانده: {hours} ساعت و {minutes} دقیقه"
                     )
                     return
-            
             last_file = files[-1]
-            if last_file and last_file.get("type") == "document":
-                await context.bot.send_document(chat_id=update.effective_chat.id, document=InputFile(last_file["path"]), caption=last_file.get("caption", ""))
-                # به‌روزرسانی دانلود کاربر
-                if user_id != MAIN_ADMIN_ID and user_id not in admins:
-                    update_user_download(user_id)
-            elif last_file and last_file.get("type") == "photo":
-                await context.bot.send_photo(chat_id=update.effective_chat.id, photo=InputFile(last_file["path"]), caption=last_file.get("caption", ""))
-                # به‌روزرسانی دانلود کاربر
-                if user_id != MAIN_ADMIN_ID and user_id not in admins:
-                    update_user_download(user_id)
-            elif last_file and last_file.get("type") == "text":
-                await update.message.reply_text(last_file["content"])
-                # به‌روزرسانی دانلود کاربر
-                if user_id != MAIN_ADMIN_ID and user_id not in admins:
-                    update_user_download(user_id)
+            try:
+                if last_file and last_file.get("type") == "document":
+                    await context.bot.send_document(chat_id=update.effective_chat.id, document=InputFile(last_file["path"]), caption=last_file.get("caption", ""))
+                    if user_id != MAIN_ADMIN_ID and user_id not in admins:
+                        update_user_download(user_id)
+                elif last_file and last_file.get("type") == "photo":
+                    await context.bot.send_photo(chat_id=update.effective_chat.id, photo=InputFile(last_file["path"]), caption=last_file.get("caption", ""))
+                    if user_id != MAIN_ADMIN_ID and user_id not in admins:
+                        update_user_download(user_id)
+                elif last_file and last_file.get("type") == "text":
+                    await update.message.reply_text(last_file["content"])
+                    if user_id != MAIN_ADMIN_ID and user_id not in admins:
+                        update_user_download(user_id)
+                else:
+                    await update.message.reply_text("نوع فایل پشتیبانی نمی‌شود.")
+            except Exception as e:
+                await update.message.reply_text(f"❌ خطا در ارسال فایل: {str(e)}")
         else:
             await update.message.reply_text("هیچ فایلی وجود ندارد.")
     elif text == "📊 وضعیت دانلود":
