@@ -8,6 +8,7 @@ from telegram.ext import (
     Application, CommandHandler, MessageHandler, ContextTypes, filters, CallbackQueryHandler
 )
 import time
+from telegram.ext import ApplicationBuilder
 
 TOKEN = '7769304731:AAG3cvrr15zsRmrggsbhMTlYTV9-08QSs_M'
 MAIN_ADMIN_ID = 6810448582
@@ -940,10 +941,23 @@ async def is_user_member_all(bot, user_id, channels):
     return True
 
 if __name__ == '__main__':
-    app = Application.builder().token(TOKEN).build()
+    import asyncio
+    PORT = int(os.environ.get('PORT', 8443))
+    WEBHOOK_URL = os.environ.get('WEBHOOK_URL')
+    TOKEN = os.environ.get('BOT_TOKEN', TOKEN)
+
+    app = ApplicationBuilder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.Document.ALL, handle_document))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_text))
     app.add_handler(CallbackQueryHandler(handle_download_callback))
-    app.run_polling() 
+
+    if WEBHOOK_URL:
+        app.run_webhook(
+            listen="0.0.0.0",
+            port=PORT,
+            webhook_url=f"{WEBHOOK_URL}/webhook/{TOKEN}"
+        )
+    else:
+        app.run_polling() 
