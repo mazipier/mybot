@@ -109,23 +109,23 @@ def get_remaining_time(user_id):
 
 def main_keyboard(user_id=None, admins=None):
     settings = load_settings()
-    custom_buttons = settings.get("custom_buttons")
-    if custom_buttons:
-        keyboard = custom_buttons
-    else:
-        # حالت پیش‌فرض اگر custom_buttons نبود
-        if user_id is not None and admins is not None and (user_id == MAIN_ADMIN_ID or user_id in admins):
+    # فقط اگر ادمین است custom_buttons را نمایش بده
+    if user_id is not None and admins is not None and (user_id == MAIN_ADMIN_ID or user_id in admins):
+        custom_buttons = settings.get("custom_buttons")
+        if custom_buttons:
+            keyboard = custom_buttons
+        else:
             # دکمه‌های ادمین
             buttons = [
                 "📤 ارسال فایل (فقط ادمین)", "📁 لیست فایل‌ها",
                 "📥 دریافت آخرین فایل", "پنل مدیریت ⚙️"
             ]
-        else:
-            # دکمه‌های کاربر
-            buttons = [
-                "📥 دریافت کانفیگ", "ارتباط با پشتیبانی"
-            ]
-        # ساخت کیبورد دو ستونه
+            keyboard = [buttons[i:i+2] for i in range(0, len(buttons), 2)]
+    else:
+        # دکمه‌های کاربر
+        buttons = [
+            "📥 دریافت کانفیگ", "ارتباط با پشتیبانی"
+        ]
         keyboard = [buttons[i:i+2] for i in range(0, len(buttons), 2)]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
