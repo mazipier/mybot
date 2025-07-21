@@ -45,7 +45,7 @@ def save_files_db(files):
 
 def load_settings():
     if not os.path.exists(SETTINGS_FILE):
-        return {"accept_files": True, "welcome_message": "به ربات فایل‌یاب خوش آمدید!", "force_channels": []}
+        return {"accept_files": True, "welcome_message": "به ربات فایل‌یاب خوش آمدید!", "force_channels": [], "after_config_text": ""}
     with open(SETTINGS_FILE, 'r', encoding='utf-8') as f:
         return json.load(f)
 
@@ -115,15 +115,18 @@ def main_keyboard(user_id=None, admins=None):
     else:
         # حالت پیش‌فرض اگر custom_buttons نبود
         if user_id is not None and admins is not None and (user_id == MAIN_ADMIN_ID or user_id in admins):
-            keyboard = [
-                ["📤 ارسال فایل (فقط ادمین)", "📁 لیست فایل‌ها"],
-                ["📥 دریافت آخرین فایل", "پنل مدیریت ⚙️"]
+            # دکمه‌های ادمین
+            buttons = [
+                "📤 ارسال فایل (فقط ادمین)", "📁 لیست فایل‌ها",
+                "📥 دریافت آخرین فایل", "پنل مدیریت ⚙️"
             ]
         else:
-            keyboard = [
-                ["📁 لیست فایل‌ها"],
-                ["📥 دریافت آخرین فایل", "📊 وضعیت دانلود"]
+            # دکمه‌های کاربر
+            buttons = [
+                "📥 دریافت کانفیگ", "ارتباط با پشتیبانی"
             ]
+        # ساخت کیبورد دو ستونه
+        keyboard = [buttons[i:i+2] for i in range(0, len(buttons), 2)]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
 MANAGE_PANEL = [
@@ -137,16 +140,13 @@ MANAGE_PANEL = [
 
 def admin_panel_keyboard():
     return ReplyKeyboardMarkup([
-        ["🔄 فعال/غیرفعال کردن دریافت فایل"],
-        ["✏️ تغییر پیام خوش‌آمد"],
+        ["🔄 فعال/غیرفعال کردن دریافت فایل", "✏️ تغییر پیام خوش‌آمد"],
         ["🗑 حذف فایل", "🔢 حذف فایل با شماره"],
-        ["🗑🗑 حذف دسته‌جمعی فایل‌ها"],
+        ["📝 تغییر نام فایل‌ها", "📝 تغییر نام دکمه"],
         ["➕ افزودن دکمه", "🗑 حذف دکمه"],
-        ["📝 تغییر نام دکمه"],
-        ["🔘 تغییر نام دکمه‌ها", "📝 تغییر نام فایل‌ها"],
         ["➕ افزودن ادمین", "➖ حذف ادمین"],
-        ["👥 مدیریت عضویت اجباری کانال"],
-        ["⬅️ بازگشت"]
+        ["👥 مدیریت عضویت اجباری کانال", "⬅️ بازگشت"],
+        ["تنظیم متن بعد از ارسال کانفیگ"]
     ], resize_keyboard=True)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -393,6 +393,11 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("بازگشت به منوی اصلی", reply_markup=admin_panel_keyboard())
             if user_state:
                 user_state["state"] = None
+            return
+        elif text == "تنظیم متن بعد از ارسال کانفیگ":
+            await update.message.reply_text("متن مورد نظر را ارسال کنید:")
+            if user_state:
+                user_state["state"] = "set_after_config_text"
             return
         else:
             await update.message.reply_text("از دکمه‌های پنل مدیریت استفاده کنید.")
@@ -715,6 +720,19 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await update.message.reply_text("خطا در تغییر نام دکمه.")
         user_state["state"] = "admin_panel"
+        return
+
+    # ارسال کانفیگ و پیام بعد از آن
+    if text == "📥 دریافت کانفیگ":
+        sent_msg = await update.message.reply_text("کانفیگ شما اینجاست!")
+        after_text = settings.get("after_config_text")
+        if after_text:
+            after_msg = await update.message.reply_text(after_text)
+            await asyncio.sleep(5)  # حذف بعد از ۵ ثانیه
+            try:
+                await after_msg.delete()
+            except Exception:
+                pass
         return
 
     # منوی اصلی
