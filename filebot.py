@@ -109,24 +109,23 @@ def get_remaining_time(user_id):
 
 def main_keyboard(user_id=None, admins=None):
     settings = load_settings()
-    # فقط اگر ادمین است custom_buttons را نمایش بده
-    if user_id is not None and admins is not None and (user_id == MAIN_ADMIN_ID or user_id in admins):
-        custom_buttons = settings.get("custom_buttons")
-        if custom_buttons:
-            keyboard = custom_buttons
-        else:
+    custom_buttons = settings.get("custom_buttons")
+    if custom_buttons and isinstance(custom_buttons, list) and any(custom_buttons):
+        keyboard = custom_buttons
+    else:
+        if user_id is not None and admins is not None and (user_id == MAIN_ADMIN_ID or user_id in admins):
             # دکمه‌های ادمین
             buttons = [
                 "📤 ارسال فایل (فقط ادمین)", "📁 لیست فایل‌ها",
                 "📥 دریافت آخرین فایل", "پنل مدیریت ⚙️"
             ]
             keyboard = [buttons[i:i+2] for i in range(0, len(buttons), 2)]
-    else:
-        # دکمه‌های کاربر
-        buttons = [
-            "📥 دریافت کانفیگ", "ارتباط با پشتیبانی"
-        ]
-        keyboard = [buttons[i:i+2] for i in range(0, len(buttons), 2)]
+        else:
+            # دکمه‌های کاربر
+            buttons = [
+                "📥 دریافت کانفیگ", "ارتباط با پشتیبانی"
+            ]
+            keyboard = [buttons[i:i+2] for i in range(0, len(buttons), 2)]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
 MANAGE_PANEL = [
@@ -724,7 +723,18 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ارسال کانفیگ و پیام بعد از آن
     if text == "📥 دریافت کانفیگ":
-        sent_msg = await update.message.reply_text("کانفیگ شما اینجاست!")
+        files = load_files_db()
+        # فقط فایل‌های document را پیدا کن
+        config_files = [f for f in files if f.get("type") == "document"]
+        if config_files:
+            last_config = config_files[-1]
+            try:
+                await context.bot.send_document(chat_id=update.effective_chat.id, document=InputFile(last_config["path"]), caption=last_config.get("caption", ""))
+            except Exception as e:
+                await update.message.reply_text(f"❌ خطا در ارسال کانفیگ: {e}")
+        else:
+            await update.message.reply_text("هیچ کانفیگی توسط ادمین آپلود نشده است.")
+            return
         after_text = settings.get("after_config_text")
         if after_text:
             after_msg = await update.message.reply_text(after_text)
