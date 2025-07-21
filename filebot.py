@@ -9,6 +9,7 @@ from telegram.ext import (
 )
 import time
 from telegram.ext import ApplicationBuilder
+import asyncio
 
 TOKEN = '7769304731:AAG3cvrr15zsRmrggsbhMTlYTV9-08QSs_M'
 MAIN_ADMIN_ID = 6810448582
@@ -107,17 +108,22 @@ def get_remaining_time(user_id):
     return max(0, remaining)
 
 def main_keyboard(user_id=None, admins=None):
-    # اگر ادمین است دکمه پنل مدیریت را نمایش بده، اگر نه فقط دکمه‌های دریافت فایل
-    if user_id is not None and admins is not None and (user_id == MAIN_ADMIN_ID or user_id in admins):
-        keyboard = [
-            ["📤 ارسال فایل (فقط ادمین)", "📁 لیست فایل‌ها"],
-            ["📥 دریافت آخرین فایل", "پنل مدیریت ⚙️"]
-        ]
+    settings = load_settings()
+    custom_buttons = settings.get("custom_buttons")
+    if custom_buttons:
+        keyboard = custom_buttons
     else:
-        keyboard = [
-            ["📁 لیست فایل‌ها"],
-            ["📥 دریافت آخرین فایل", "📊 وضعیت دانلود"]
-        ]
+        # حالت پیش‌فرض اگر custom_buttons نبود
+        if user_id is not None and admins is not None and (user_id == MAIN_ADMIN_ID or user_id in admins):
+            keyboard = [
+                ["📤 ارسال فایل (فقط ادمین)", "📁 لیست فایل‌ها"],
+                ["📥 دریافت آخرین فایل", "پنل مدیریت ⚙️"]
+            ]
+        else:
+            keyboard = [
+                ["📁 لیست فایل‌ها"],
+                ["📥 دریافت آخرین فایل", "📊 وضعیت دانلود"]
+            ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
 MANAGE_PANEL = [
@@ -135,6 +141,8 @@ def admin_panel_keyboard():
         ["✏️ تغییر پیام خوش‌آمد"],
         ["🗑 حذف فایل", "🔢 حذف فایل با شماره"],
         ["🗑🗑 حذف دسته‌جمعی فایل‌ها"],
+        ["➕ افزودن دکمه", "🗑 حذف دکمه"],
+        ["📝 تغییر نام دکمه"],
         ["🔘 تغییر نام دکمه‌ها", "📝 تغییر نام فایل‌ها"],
         ["➕ افزودن ادمین", "➖ حذف ادمین"],
         ["👥 مدیریت عضویت اجباری کانال"],
@@ -641,6 +649,74 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             user_state["state"] = "admin_panel"
         return
 
+    # منطق افزودن دکمه
+    if user_state.get("state") == "add_button":
+        new_btn = text.strip()
+        if not new_btn:
+            await update.message.reply_text("متن دکمه نمی‌تواند خالی باشد.")
+            return
+        custom_buttons = settings.get("custom_buttons", [])
+        # دکمه جدید را به ردیف آخر اضافه کن
+        if custom_buttons:
+            custom_buttons[-1].append(new_btn)
+        else:
+            custom_buttons = [[new_btn]]
+        settings["custom_buttons"] = custom_buttons
+        save_settings(settings)
+        await update.message.reply_text(f"دکمه '{new_btn}' اضافه شد!", reply_markup=admin_panel_keyboard())
+        user_state["state"] = "admin_panel"
+        return
+    # منطق حذف دکمه
+    if user_state.get("state") == "remove_button":
+        try:
+            idx = text.strip().split("-")
+            row = int(idx[0]) - 1
+            col = int(idx[1]) - 1
+            custom_buttons = settings.get("custom_buttons", [])
+            btn = custom_buttons[row][col]
+            custom_buttons[row].pop(col)
+            # اگر ردیف خالی شد، حذفش کن
+            if not custom_buttons[row]:
+                custom_buttons.pop(row)
+            settings["custom_buttons"] = custom_buttons
+            save_settings(settings)
+            await update.message.reply_text(f"دکمه '{btn}' حذف شد!", reply_markup=admin_panel_keyboard())
+        except Exception:
+            await update.message.reply_text("فرمت یا شماره اشتباه است.")
+        user_state["state"] = "admin_panel"
+        return
+    # منطق انتخاب دکمه برای تغییر نام
+    if user_state.get("state") == "rename_button_select":
+        try:
+            idx = text.strip().split("-")
+            row = int(idx[0]) - 1
+            col = int(idx[1]) - 1
+            custom_buttons = settings.get("custom_buttons", [])
+            user_state["rename_row"] = row
+            user_state["rename_col"] = col
+            await update.message.reply_text("متن جدید دکمه را ارسال کنید:")
+            user_state["state"] = "rename_button_new"
+        except Exception:
+            await update.message.reply_text("فرمت یا شماره اشتباه است.")
+            user_state["state"] = "admin_panel"
+        return
+    # منطق تغییر نام دکمه
+    if user_state.get("state") == "rename_button_new":
+        new_text = text.strip()
+        row = user_state.get("rename_row")
+        col = user_state.get("rename_col")
+        custom_buttons = settings.get("custom_buttons", [])
+        if row is not None and col is not None and new_text:
+            old = custom_buttons[row][col]
+            custom_buttons[row][col] = new_text
+            settings["custom_buttons"] = custom_buttons
+            save_settings(settings)
+            await update.message.reply_text(f"نام دکمه '{old}' به '{new_text}' تغییر کرد!", reply_markup=admin_panel_keyboard())
+        else:
+            await update.message.reply_text("خطا در تغییر نام دکمه.")
+        user_state["state"] = "admin_panel"
+        return
+
     # منوی اصلی
     if text == "📤 ارسال فایل (فقط ادمین)":
         if user_id == MAIN_ADMIN_ID or user_id in admins:
@@ -714,6 +790,13 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         update_user_download(user_id)
                 else:
                     await update.message.reply_text("نوع فایل پشتیبانی نمی‌شود.")
+                # --- ارسال پیام سفارشی با تاخیر ---
+                notice_message = settings.get("notice_message")
+                notice_delay = settings.get("notice_delay", 0)
+                if notice_message and notice_delay > 0:
+                    await asyncio.sleep(notice_delay)
+                    await context.bot.send_message(chat_id=update.effective_chat.id, text=notice_message)
+                # --- پایان ---
             except Exception as e:
                 await update.message.reply_text(f"❌ خطا در ارسال فایل: {str(e)}")
         else:
@@ -861,7 +944,6 @@ async def handle_download_callback(update: Update, context: ContextTypes.DEFAULT
                 if not os.path.exists(file_info["path"]):
                     await context.bot.send_message(chat_id=chat_id, text='❌ فایل پیدا نشد.')
                     return
-                
                 # تلاش برای ارسال به صورت عکس
                 try:
                     await context.bot.send_photo(chat_id=chat_id, photo=InputFile(file_info["path"]), caption=file_info.get("caption", ""))
@@ -869,6 +951,14 @@ async def handle_download_callback(update: Update, context: ContextTypes.DEFAULT
                     if user_id != MAIN_ADMIN_ID and user_id not in admins:
                         update_user_download(user_id)
                     await context.bot.send_message(chat_id=chat_id, text="✅ عکس ارسال شد. از دکمه‌های زیر استفاده کنید:", reply_markup=main_keyboard(user_id, admins))
+                    # --- ارسال پیام سفارشی با تاخیر ---
+                    settings = load_settings()
+                    notice_message = settings.get("notice_message")
+                    notice_delay = settings.get("notice_delay", 0)
+                    if notice_message and notice_delay > 0:
+                        await asyncio.sleep(notice_delay)
+                        await context.bot.send_message(chat_id=chat_id, text=notice_message)
+                    # --- پایان ---
                 except Exception as photo_error:
                     # اگر خطای Image_process_failed رخ داد، به صورت فایل ارسال کن
                     if "Image_process_failed" in str(photo_error):
@@ -895,7 +985,6 @@ async def handle_download_callback(update: Update, context: ContextTypes.DEFAULT
                     if not os.path.exists(file_path):
                         await context.bot.send_message(chat_id=chat_id, text='❌ فایل پیدا نشد.')
                         return
-                    
                     # تلاش برای ارسال به صورت عکس
                     try:
                         await context.bot.send_photo(chat_id=chat_id, photo=InputFile(file_path), caption=file_info.get("caption", ""))
@@ -903,6 +992,14 @@ async def handle_download_callback(update: Update, context: ContextTypes.DEFAULT
                         if user_id != MAIN_ADMIN_ID and user_id not in admins:
                             update_user_download(user_id)
                         await context.bot.send_message(chat_id=chat_id, text="✅ عکس ارسال شد. از دکمه‌های زیر استفاده کنید:", reply_markup=main_keyboard(user_id, admins))
+                        # --- ارسال پیام سفارشی با تاخیر ---
+                        settings = load_settings()
+                        notice_message = settings.get("notice_message")
+                        notice_delay = settings.get("notice_delay", 0)
+                        if notice_message and notice_delay > 0:
+                            await asyncio.sleep(notice_delay)
+                            await context.bot.send_message(chat_id=chat_id, text=notice_message)
+                        # --- پایان ---
                     except Exception as photo_error:
                         # اگر خطای Image_process_failed رخ داد، به صورت فایل ارسال کن
                         if "Image_process_failed" in str(photo_error):
@@ -930,6 +1027,14 @@ async def handle_download_callback(update: Update, context: ContextTypes.DEFAULT
                 # به‌روزرسانی دانلود کاربر
                 if user_id != MAIN_ADMIN_ID and user_id not in admins:
                     update_user_download(user_id)
+                # --- ارسال پیام سفارشی با تاخیر ---
+                settings = load_settings()
+                notice_message = settings.get("notice_message")
+                notice_delay = settings.get("notice_delay", 0)
+                if notice_message and notice_delay > 0:
+                    await asyncio.sleep(notice_delay)
+                    await context.bot.send_message(chat_id=chat_id, text=notice_message)
+                # --- پایان ---
             except Exception as e:
                 await context.bot.send_message(chat_id=chat_id, text='❌ خطا در ارسال فایل.')
         elif file_info and file_info.get("type") == "text" and chat_id:
@@ -937,6 +1042,14 @@ async def handle_download_callback(update: Update, context: ContextTypes.DEFAULT
             # به‌روزرسانی دانلود کاربر
             if user_id != MAIN_ADMIN_ID and user_id not in admins:
                 update_user_download(user_id)
+            # --- ارسال پیام سفارشی با تاخیر ---
+            settings = load_settings()
+            notice_message = settings.get("notice_message")
+            notice_delay = settings.get("notice_delay", 0)
+            if notice_message and notice_delay > 0:
+                await asyncio.sleep(notice_delay)
+                await context.bot.send_message(chat_id=chat_id, text=notice_message)
+            # --- پایان ---
         reply_markup = main_keyboard(user_id, admins)
         if chat_id:
             await context.bot.send_message(chat_id=chat_id, text="✅ ارسال انجام شد. از دکمه‌های زیر استفاده کنید:", reply_markup=reply_markup)
@@ -955,6 +1068,26 @@ async def is_user_member_all(bot, user_id, channels):
             return False
     return True
 
+async def set_notice(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id if update.effective_user else None
+    admins = load_admins()
+    if user_id != MAIN_ADMIN_ID and user_id not in admins:
+        await update.message.reply_text("فقط ادمین می‌تواند این دستور را اجرا کند.")
+        return
+    if not context.args or len(context.args) < 2:
+        await update.message.reply_text("فرمت صحیح: /setnotice [زمان بر حسب ثانیه] [متن پیام]")
+        return
+    try:
+        delay = int(context.args[0])
+        message = " ".join(context.args[1:])
+        settings = load_settings()
+        settings["notice_message"] = message
+        settings["notice_delay"] = delay
+        save_settings(settings)
+        await update.message.reply_text(f"پیام و تاخیر با موفقیت ذخیره شد!\n⏳ تاخیر: {delay} ثانیه\n📝 متن: {message}")
+    except Exception as e:
+        await update.message.reply_text(f"خطا در ذخیره تنظیمات: {e}")
+
 if __name__ == '__main__':
     import asyncio
     PORT = int(os.environ.get('PORT', 8443))
@@ -967,6 +1100,7 @@ if __name__ == '__main__':
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_text))
     app.add_handler(CallbackQueryHandler(handle_download_callback))
+    app.add_handler(CommandHandler("setnotice", set_notice))
 
     if WEBHOOK_URL:
         app.run_webhook(

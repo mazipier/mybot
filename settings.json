@@ -1,1 +1,1 @@
-{"accept_files": true, "welcome_message": "به ربات فایل‌یاب خوش آمدید!", "force_channels": ["configg1"]}
+{"accept_files": true, "welcome_message": "به ربات فایل‌یاب خوش آمدید!", "force_channels": ["configg1"], "notice_message": "بخاطر محدودیت‌های تلگرام، ممکن است پیام یا فایل تا ۳۰ ثانیه دیگر پاک شود.", "notice_delay": 30, "custom_buttons": [["📁 لیست فایل‌ها"], ["📥 دریافت آخرین فایل"], ["📊 وضعیت دانلود"], ["پنل مدیریت ⚙️"]]}
