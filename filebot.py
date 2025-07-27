@@ -10,6 +10,7 @@ from telegram.ext import (
 import time
 from telegram.ext import ApplicationBuilder
 import asyncio
+import re
 
 TOKEN = '7769304731:AAG3cvrr15zsRmrggsbhMTlYTV9-08QSs_M'
 MAIN_ADMIN_ID = 6810448582
@@ -109,23 +110,16 @@ def get_remaining_time(user_id):
 
 def main_keyboard(user_id=None, admins=None):
     settings = load_settings()
-    custom_buttons = settings.get("custom_buttons")
-    if custom_buttons and isinstance(custom_buttons, list) and any(custom_buttons):
-        keyboard = custom_buttons
+    # فقط یک دکمه برای کاربر عادی: دریافت کانفیگ
+    if user_id is not None and admins is not None and (user_id == MAIN_ADMIN_ID or user_id in admins):
+        buttons = [
+            "📤 ارسال فایل (فقط ادمین)", "📁 لیست فایل‌ها",
+            "📥 دریافت آخرین فایل", "پنل مدیریت ⚙️",
+            "➕ آپلود کانفیگ"
+        ]
+        keyboard = [buttons[i:i+2] for i in range(0, len(buttons), 2)]
     else:
-        if user_id is not None and admins is not None and (user_id == MAIN_ADMIN_ID or user_id in admins):
-            # دکمه‌های ادمین
-            buttons = [
-                "📤 ارسال فایل (فقط ادمین)", "📁 لیست فایل‌ها",
-                "📥 دریافت آخرین فایل", "پنل مدیریت ⚙️"
-            ]
-            keyboard = [buttons[i:i+2] for i in range(0, len(buttons), 2)]
-        else:
-            # دکمه‌های کاربر
-            buttons = [
-                "📥 دریافت کانفیگ", "ارتباط با پشتیبانی"
-            ]
-            keyboard = [buttons[i:i+2] for i in range(0, len(buttons), 2)]
+        keyboard = [["📥 دریافت کانفیگ"]]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
 MANAGE_PANEL = [
@@ -182,7 +176,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.effective_user or not update.message.document:
-        return
+            return
     user_id = update.effective_user.id
     settings = load_settings()
     if user_id == MAIN_ADMIN_ID or user_id in load_admins():
@@ -212,7 +206,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.effective_user or not update.message.photo:
-        return
+            return
     user_id = update.effective_user.id
     settings = load_settings()
     if user_id == MAIN_ADMIN_ID or user_id in load_admins():
@@ -273,6 +267,23 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     settings = load_settings()
     admins = load_admins()
 
+    # --- بررسی عضویت اجباری در ابتدای هر پیام ---
+    force_channels = settings.get("force_channels", [])
+    if force_channels and user_id != MAIN_ADMIN_ID and user_id not in admins:
+        is_member = await is_user_member_all(context.bot, user_id, force_channels)
+        if not is_member:
+            join_buttons = []
+            for ch in force_channels:
+                channel_name = ch.lstrip('@')
+                join_buttons.append([InlineKeyboardButton(f"عضویت در @{channel_name}", url=f"https://t.me/{channel_name}")])
+            join_buttons.append([InlineKeyboardButton("✅ بررسی مجدد عضویت", callback_data="check_membership")])
+            await update.message.reply_text(
+                "🔒 برای استفاده از ربات ابتدا باید در کانال(های) زیر عضو شوید:\n\n" +
+                "\n".join([f"• @{ch.lstrip('@')}" for ch in force_channels]),
+                reply_markup=InlineKeyboardMarkup(join_buttons)
+            )
+            return
+
     # اگر یکی از دکمه‌های اصلی زده شد، state را ریست کن
     main_menu_texts = [
         "📤 ارسال فایل (فقط ادمین)",
@@ -282,15 +293,159 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "📊 وضعیت دانلود",
         "⬅️ بازگشت"
     ]
-    if text in main_menu_texts and user_state.get("state"):
+    if text in main_menu_texts and user_state.get("state") and user_state.get("state") != "manage_force_channels":
+            user_state["state"] = None
+
+    # منطق دکمه‌های اصلی - ابتدا بررسی شود
+    if text == "📥 دریافت کانفیگ":
+        files = load_files_db()
+        # فایل‌های document و متن را پیدا کن
+        config_files = [f for f in files if f.get("type") in ["document", "text"]]
+        if config_files:
+            last_config = config_files[-1]
+            try:
+                if last_config.get("type") == "document":
+                    await context.bot.send_document(chat_id=update.effective_chat.id, document=InputFile(last_config["path"]), caption=last_config.get("caption", ""))
+                elif last_config.get("type") == "text":
+                    await update.message.reply_text(last_config["content"])
+                
+                # ارسال پیام بعد از کانفیگ
+                after_text = settings.get("after_config_text")
+                if after_text:
+                    after_msg = await update.message.reply_text(after_text)
+                    await asyncio.sleep(5)  # حذف بعد از ۵ ثانیه
+                    try:
+                        await after_msg.delete()
+                    except Exception:
+                        pass
+            except Exception as e:
+                await update.message.reply_text(f"❌ خطا در ارسال کانفیگ: {e}")
+        else:
+            await update.message.reply_text("هیچ کانفیگی توسط ادمین آپلود نشده است.")
+        return
+
+    if text == "📤 ارسال فایل (فقط ادمین)":
+        if user_id == MAIN_ADMIN_ID or user_id in admins:
+            await update.message.reply_text("لطفاً فایل یا عکس خود را ارسال کنید.")
+        else:
+            await update.message.reply_text("فقط ادمین می‌تواند فایل ارسال کند.")
+        return
+
+    if text == "📁 لیست فایل‌ها":
+        files = load_files_db()
+        if not files:
+            await update.message.reply_text("هیچ فایلی وجود ندارد.")
+            return
+        keyboard = []
+        for i, f in enumerate(files, 1):
+            if f:
+                # نمایش نام فایل از فیلد name
+                file_name = f.get('name', f.get('id', f'فایل {i}'))
+                
+                # اضافه کردن نوع فایل به ابتدای نام
+                file_type = f.get('type', '')
+                if file_type == 'photo':
+                    show_name = f"📷 {i}. {file_name}"
+                elif file_type == 'document':
+                    show_name = f"📄 {i}. {file_name}"
+                elif file_type == 'text':
+                    show_name = f"📝 {i}. {file_name}"
+                else:
+                    show_name = f"📁 {i}. {file_name}"
+                
+                # اضافه کردن caption اگر وجود داشته باشد
+                caption = f.get('caption', '')
+                if caption:
+                    show_name += f" - {caption[:20]}"  # حداکثر 20 کاراکتر
+                
+                callback_id = f.get('id', '')[:30]  # حداکثر ۳۰ کاراکتر
+                keyboard.append([InlineKeyboardButton(show_name, callback_data=f"download_{callback_id}")])
+        keyboard.append([InlineKeyboardButton("⬅️ بازگشت", callback_data="back_to_main")])
+        await update.message.reply_text(
+            "برای دریافت هر فایل روی دکمه آن کلیک کنید:\n\n💡 برای حذف فایل، شماره آن را ارسال کنید.",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        return
+
+    if text == "📥 دریافت آخرین فایل":
         user_state["state"] = None
+        files = load_files_db()
+        if files:
+            # بررسی محدودیت دانلود برای کاربران غیر ادمین
+            if user_id != MAIN_ADMIN_ID and user_id not in admins:
+                if not can_user_download(user_id):
+                    remaining_time = get_remaining_time(user_id)
+                    hours = int(remaining_time // 3600)
+                    minutes = int((remaining_time % 3600) // 60)
+                    await update.message.reply_text(
+                        f"⏰ شما در 12 ساعت گذشته فایل دانلود کرده‌اید!\n"
+                        f"⏳ زمان باقی‌مانده: {hours} ساعت و {minutes} دقیقه"
+                    )
+                    return
+            last_file = files[-1]
+            try:
+                if last_file and last_file.get("type") == "document":
+                    await context.bot.send_document(chat_id=update.effective_chat.id, document=InputFile(last_file["path"]), caption=last_file.get("caption", ""))
+                    if user_id != MAIN_ADMIN_ID and user_id not in admins:
+                        update_user_download(user_id)
+                elif last_file and last_file.get("type") == "photo":
+                    await context.bot.send_photo(chat_id=update.effective_chat.id, photo=InputFile(last_file["path"]), caption=last_file.get("caption", ""))
+                    if user_id != MAIN_ADMIN_ID and user_id not in admins:
+                        update_user_download(user_id)
+                elif last_file and last_file.get("type") == "text":
+                    await update.message.reply_text(last_file["content"])
+                    if user_id != MAIN_ADMIN_ID and user_id not in admins:
+                        update_user_download(user_id)
+                else:
+                    await update.message.reply_text("نوع فایل پشتیبانی نمی‌شود.")
+                # --- ارسال پیام سفارشی با تاخیر ---
+                notice_message = settings.get("notice_message")
+                notice_delay = settings.get("notice_delay", 0)
+                if notice_message and notice_delay > 0:
+                    await asyncio.sleep(notice_delay)
+                    await context.bot.send_message(chat_id=update.effective_chat.id, text=notice_message)
+                # --- پایان ---
+            except Exception as e:
+                await update.message.reply_text(f"❌ خطا در ارسال فایل: {str(e)}")
+        else:
+            await update.message.reply_text("هیچ فایلی وجود ندارد.")
+        return
+
+    if text == "📊 وضعیت دانلود":
+        users_db = load_users_db()
+        user_id_str = str(user_id)
+        user_data = users_db.get(user_id_str, {})
+        
+        if user_id_str not in users_db:
+            message = "✅ شما هنوز هیچ فایلی دانلود نکرده‌اید.\n🆓 می‌توانید یک فایل دانلود کنید."
+        else:
+            last_download_time = user_data.get("last_download", 0)
+            download_count = user_data.get("download_count", 0)
+            remaining_time = get_remaining_time(user_id)
+            
+            if remaining_time > 0:
+                hours = int(remaining_time // 3600)
+                minutes = int((remaining_time % 3600) // 60)
+                message = f"⏰ شما در 12 ساعت گذشته فایل دانلود کرده‌اید!\n"
+                message += f"📊 تعداد دانلود: {download_count}\n"
+                message += f"⏳ زمان باقی‌مانده: {hours} ساعت و {minutes} دقیقه"
+            else:
+                message = f"✅ می‌توانید فایل دانلود کنید!\n"
+                message += f"📊 تعداد دانلود: {download_count}"
+        
+        await update.message.reply_text(message)
+        return
+
+    if text == "⬅️ بازگشت":
+        await update.message.reply_text("بازگشت به منوی اصلی", reply_markup=main_keyboard(user_id, admins))
+        return
 
     # مدیریت پنل
     if text == "پنل مدیریت ⚙️" and (user_id == MAIN_ADMIN_ID or user_id in admins):
         if update.message:
             await update.message.reply_text("پنل مدیریت فعال شد!", reply_markup=admin_panel_keyboard())
-        user_state ["state"] = "admin_panel"
-        return
+            user_state ["state"] = "admin_panel"
+            return
 
     # منطق پنل مدیریت
     if user_state and user_state.get("state") == "admin_panel":
@@ -389,7 +544,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 user_state["state"] = "manage_force_channels"
             return
         elif text == "⬅️ بازگشت":
-            await update.message.reply_text("بازگشت به منوی اصلی", reply_markup=admin_panel_keyboard())
+            await update.message.reply_text("بازگشت به منوی اصلی", reply_markup=main_keyboard(user_id, admins))
             if user_state:
                 user_state["state"] = None
             return
@@ -400,6 +555,64 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         else:
             await update.message.reply_text("از دکمه‌های پنل مدیریت استفاده کنید.")
+        return
+
+    # منطق دکمه آپلود کانفیگ (برای ادمین)
+    if text == "➕ آپلود کانفیگ" and (user_id == MAIN_ADMIN_ID or user_id in admins):
+        await update.message.reply_text("لطفاً فایل، عکس یا متن کانفیگ را ارسال کنید.")
+        user_state["state"] = "awaiting_config_upload"
+        return
+
+    # پردازش متن‌های ارسالی در حالت آپلود کانفیگ
+    if user_state and user_state.get("state") == "awaiting_config_upload":
+        # ذخیره متن به عنوان فایل متنی
+        files = load_files_db()
+        import time
+        timestamp = int(time.time())
+        text_id = f"text_{timestamp}"
+        
+        files.append({
+            "id": text_id,
+            "type": "text",
+            "name": f"متن {timestamp}",
+            "content": text
+        })
+        save_files_db(files)
+        
+        await update.message.reply_text(
+            f"✅ متن کانفیگ با موفقیت ذخیره شد!\n📝 نام: متن {timestamp}",
+            reply_markup=admin_panel_keyboard()
+        )
+        user_state["state"] = "admin_panel"
+        return
+
+    # حذف فایل با شماره (برای همه کاربران)
+    if text and text.isdigit():
+        try:
+            file_index = int(text) - 1
+            files = load_files_db()
+            if 0 <= file_index < len(files) and files[file_index]:
+                file_to_delete = files[file_index]
+                
+                # حذف فایل از سیستم
+                try:
+                    if file_to_delete.get("path") and os.path.exists(file_to_delete["path"]):
+                        os.remove(file_to_delete["path"])
+                except Exception:
+                    pass
+                
+                # حذف از دیتابیس
+                files.pop(file_index)
+                save_files_db(files)
+                
+                await update.message.reply_text(
+                    f"✅ فایل '{file_to_delete.get('name', file_to_delete.get('id', f'فایل {file_index + 1}'))}' با شماره {file_index + 1} حذف شد.",
+                    reply_markup=main_keyboard(user_id, admins)
+                )
+            else:
+                await update.message.reply_text("❌ شماره معتبر وارد کنید.")
+        except ValueError:
+            await update.message.reply_text("❌ شماره معتبر وارد کنید.")
         return
 
     # تغییر پیام خوش‌آمد
@@ -446,15 +659,18 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # حذف فایل با شماره
     if user_state and user_state.get("state") == "delete_file_by_number":
         try:
-            file_index = int(text) - 1
-            files = load_files_db()
-            if 0 <= file_index < len(files) and files[file_index]:
-                file_to_delete = files[file_index]
-                if file_to_delete.get("path") and os.path.exists(file_to_delete["path"]):
-                    os.remove(file_to_delete["path"])
-                files.pop(file_index)
-                save_files_db(files)
-                await update.message.reply_text(f"فایل با شماره {file_index + 1} حذف شد.", reply_markup=admin_panel_keyboard())
+            if text is not None:
+                file_index = int(text) - 1
+                files = load_files_db()
+                if 0 <= file_index < len(files) and files[file_index]:
+                    file_to_delete = files[file_index]
+                    if file_to_delete.get("path") and os.path.exists(file_to_delete["path"]):
+                        os.remove(file_to_delete["path"])
+                    files.pop(file_index)
+                    save_files_db(files)
+                    await update.message.reply_text(f"فایل با شماره {file_index + 1} حذف شد.", reply_markup=admin_panel_keyboard())
+                else:
+                    await update.message.reply_text("شماره معتبر وارد کنید.")
             else:
                 await update.message.reply_text("شماره معتبر وارد کنید.")
         except ValueError:
@@ -612,23 +828,17 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             if text is None:
                 await update.message.reply_text("لطفاً کانال‌ها را وارد کنید.", reply_markup=admin_panel_keyboard())
-                if user_state:
-                    user_state["state"] = "admin_panel"
                 return
-            
-            # تقسیم کانال‌ها با کاما یا اینتر
-            channels = [ch.strip().lstrip('@') for ch in text.split(',') if ch.strip()]
+            # تقسیم کانال‌ها با کاما یا اینتر (هر خط)
+            # هم کاما، هم اینتر، هم فاصله اضافی
+            channels = [ch.strip().lstrip('@') for ch in re.split(r'[\s,]+', text) if ch.strip()]
             if not channels:
                 await update.message.reply_text("لطفاً حداقل یک کانال وارد کنید.", reply_markup=admin_panel_keyboard())
-                if user_state:
-                    user_state["state"] = "admin_panel"
                 return
-            
             # بررسی معتبر بودن کانال‌ها
             valid_channels = []
             for channel in channels:
                 try:
-                    # بررسی وجود کانال
                     chat = await context.bot.get_chat(f"@{channel}")
                     if chat.type in ["channel", "supergroup"]:
                         valid_channels.append(channel)
@@ -636,7 +846,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         await update.message.reply_text(f"کانال @{channel} معتبر نیست.")
                 except Exception:
                     await update.message.reply_text(f"کانال @{channel} پیدا نشد.")
-            
             if valid_channels:
                 settings["force_channels"] = valid_channels
                 save_settings(settings)
@@ -645,255 +854,23 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     "\n".join([f"• @{ch}" for ch in valid_channels]),
                     reply_markup=admin_panel_keyboard()
                 )
+                if user_state:
+                    user_state["state"] = "admin_panel"
             else:
                 await update.message.reply_text("هیچ کانال معتبری پیدا نشد.", reply_markup=admin_panel_keyboard())
+            return
         except Exception as e:
             await update.message.reply_text(f"خطا در تنظیم کانال‌ها: {str(e)}", reply_markup=admin_panel_keyboard())
+        return
+
+    # تنظیم متن بعد از ارسال کانفیگ
+    if user_state and user_state.get("state") == "set_after_config_text":
+        settings["after_config_text"] = text
+        save_settings(settings)
+        await update.message.reply_text("✅ متن بعد از ارسال کانفیگ ذخیره شد.", reply_markup=admin_panel_keyboard())
         if user_state:
             user_state["state"] = "admin_panel"
         return
-
-    # منطق افزودن دکمه
-    if user_state.get("state") == "add_button":
-        new_btn = text.strip()
-        if not new_btn:
-            await update.message.reply_text("متن دکمه نمی‌تواند خالی باشد.")
-            return
-        custom_buttons = settings.get("custom_buttons", [])
-        # دکمه جدید را به ردیف آخر اضافه کن
-        if custom_buttons:
-            custom_buttons[-1].append(new_btn)
-        else:
-            custom_buttons = [[new_btn]]
-        settings["custom_buttons"] = custom_buttons
-        save_settings(settings)
-        await update.message.reply_text(f"دکمه '{new_btn}' اضافه شد!", reply_markup=admin_panel_keyboard())
-        user_state["state"] = "admin_panel"
-        return
-    # منطق حذف دکمه
-    if user_state.get("state") == "remove_button":
-        try:
-            idx = text.strip().split("-")
-            row = int(idx[0]) - 1
-            col = int(idx[1]) - 1
-            custom_buttons = settings.get("custom_buttons", [])
-            btn = custom_buttons[row][col]
-            custom_buttons[row].pop(col)
-            # اگر ردیف خالی شد، حذفش کن
-            if not custom_buttons[row]:
-                custom_buttons.pop(row)
-            settings["custom_buttons"] = custom_buttons
-            save_settings(settings)
-            await update.message.reply_text(f"دکمه '{btn}' حذف شد!", reply_markup=admin_panel_keyboard())
-        except Exception:
-            await update.message.reply_text("فرمت یا شماره اشتباه است.")
-        user_state["state"] = "admin_panel"
-        return
-    # منطق انتخاب دکمه برای تغییر نام
-    if user_state.get("state") == "rename_button_select":
-        try:
-            idx = text.strip().split("-")
-            row = int(idx[0]) - 1
-            col = int(idx[1]) - 1
-            custom_buttons = settings.get("custom_buttons", [])
-            user_state["rename_row"] = row
-            user_state["rename_col"] = col
-            await update.message.reply_text("متن جدید دکمه را ارسال کنید:")
-            user_state["state"] = "rename_button_new"
-        except Exception:
-            await update.message.reply_text("فرمت یا شماره اشتباه است.")
-            user_state["state"] = "admin_panel"
-        return
-    # منطق تغییر نام دکمه
-    if user_state.get("state") == "rename_button_new":
-        new_text = text.strip()
-        row = user_state.get("rename_row")
-        col = user_state.get("rename_col")
-        custom_buttons = settings.get("custom_buttons", [])
-        if row is not None and col is not None and new_text:
-            old = custom_buttons[row][col]
-            custom_buttons[row][col] = new_text
-            settings["custom_buttons"] = custom_buttons
-            save_settings(settings)
-            await update.message.reply_text(f"نام دکمه '{old}' به '{new_text}' تغییر کرد!", reply_markup=admin_panel_keyboard())
-        else:
-            await update.message.reply_text("خطا در تغییر نام دکمه.")
-        user_state["state"] = "admin_panel"
-        return
-
-    # ارسال کانفیگ و پیام بعد از آن
-    if text == "📥 دریافت کانفیگ":
-        files = load_files_db()
-        # فقط فایل‌های document را پیدا کن
-        config_files = [f for f in files if f.get("type") == "document"]
-        if config_files:
-            last_config = config_files[-1]
-            try:
-                await context.bot.send_document(chat_id=update.effective_chat.id, document=InputFile(last_config["path"]), caption=last_config.get("caption", ""))
-            except Exception as e:
-                await update.message.reply_text(f"❌ خطا در ارسال کانفیگ: {e}")
-        else:
-            await update.message.reply_text("هیچ کانفیگی توسط ادمین آپلود نشده است.")
-            return
-        after_text = settings.get("after_config_text")
-        if after_text:
-            after_msg = await update.message.reply_text(after_text)
-            await asyncio.sleep(5)  # حذف بعد از ۵ ثانیه
-            try:
-                await after_msg.delete()
-            except Exception:
-                pass
-        return
-
-    # منوی اصلی
-    if text == "📤 ارسال فایل (فقط ادمین)":
-        if user_id == MAIN_ADMIN_ID or user_id in admins:
-            await update.message.reply_text("لطفاً فایل یا عکس خود را ارسال کنید.")
-        else:
-            await update.message.reply_text("فقط ادمین می‌تواند فایل ارسال کند.")
-        return
-    if text == "📁 لیست فایل‌ها":
-        files = load_files_db()
-        if not files:
-            await update.message.reply_text("هیچ فایلی وجود ندارد.")
-            return
-        keyboard = []
-        for i, f in enumerate(files, 1):
-            if f:
-                # نمایش نام فایل از فیلد name
-                file_name = f.get('name', f.get('id', f'فایل {i}'))
-                
-                # اضافه کردن نوع فایل به ابتدای نام
-                file_type = f.get('type', '')
-                if file_type == 'photo':
-                    show_name = f"📷 {i}. {file_name}"
-                elif file_type == 'document':
-                    show_name = f"📄 {i}. {file_name}"
-                elif file_type == 'text':
-                    show_name = f"📝 {i}. {file_name}"
-                else:
-                    show_name = f"📁 {i}. {file_name}"
-                
-                # اضافه کردن caption اگر وجود داشته باشد
-                caption = f.get('caption', '')
-                if caption:
-                    show_name += f" - {caption[:20]}"  # حداکثر 20 کاراکتر
-                
-                callback_id = f.get('id', '')[:30]  # حداکثر ۳۰ کاراکتر
-                keyboard.append([InlineKeyboardButton(show_name, callback_data=f"download_{callback_id}")])
-        keyboard.append([InlineKeyboardButton("⬅️ بازگشت", callback_data="back_to_main")])
-        await update.message.reply_text(
-            "برای دریافت هر فایل روی دکمه آن کلیک کنید:\n\n💡 برای حذف فایل، شماره آن را ارسال کنید.",
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
-    # اگر دکمه «📥 دریافت آخرین فایل» زده شد، state را ریست کن و فقط منطق همین دکمه را اجرا کن
-    if text == "📥 دریافت آخرین فایل":
-        user_state["state"] = None
-        files = load_files_db()
-        if files:
-            # بررسی محدودیت دانلود برای کاربران غیر ادمین
-            if user_id != MAIN_ADMIN_ID and user_id not in admins:
-                if not can_user_download(user_id):
-                    remaining_time = get_remaining_time(user_id)
-                    hours = int(remaining_time // 3600)
-                    minutes = int((remaining_time % 3600) // 60)
-                    await update.message.reply_text(
-                        f"⏰ شما در 12 ساعت گذشته فایل دانلود کرده‌اید!\n"
-                        f"⏳ زمان باقی‌مانده: {hours} ساعت و {minutes} دقیقه"
-                    )
-                    return
-            last_file = files[-1]
-            try:
-                if last_file and last_file.get("type") == "document":
-                    await context.bot.send_document(chat_id=update.effective_chat.id, document=InputFile(last_file["path"]), caption=last_file.get("caption", ""))
-                    if user_id != MAIN_ADMIN_ID and user_id not in admins:
-                        update_user_download(user_id)
-                elif last_file and last_file.get("type") == "photo":
-                    await context.bot.send_photo(chat_id=update.effective_chat.id, photo=InputFile(last_file["path"]), caption=last_file.get("caption", ""))
-                    if user_id != MAIN_ADMIN_ID and user_id not in admins:
-                        update_user_download(user_id)
-                elif last_file and last_file.get("type") == "text":
-                    await update.message.reply_text(last_file["content"])
-                    if user_id != MAIN_ADMIN_ID and user_id not in admins:
-                        update_user_download(user_id)
-                else:
-                    await update.message.reply_text("نوع فایل پشتیبانی نمی‌شود.")
-                # --- ارسال پیام سفارشی با تاخیر ---
-                notice_message = settings.get("notice_message")
-                notice_delay = settings.get("notice_delay", 0)
-                if notice_message and notice_delay > 0:
-                    await asyncio.sleep(notice_delay)
-                    await context.bot.send_message(chat_id=update.effective_chat.id, text=notice_message)
-                # --- پایان ---
-            except Exception as e:
-                await update.message.reply_text(f"❌ خطا در ارسال فایل: {str(e)}")
-        else:
-            await update.message.reply_text("هیچ فایلی وجود ندارد.")
-        return
-    elif text == "📊 وضعیت دانلود":
-        users_db = load_users_db()
-        user_id_str = str(user_id)
-        user_data = users_db.get(user_id_str, {})
-        
-        if user_id_str not in users_db:
-            message = "✅ شما هنوز هیچ فایلی دانلود نکرده‌اید.\n🆓 می‌توانید یک فایل دانلود کنید."
-        else:
-            last_download_time = user_data.get("last_download", 0)
-            download_count = user_data.get("download_count", 0)
-            remaining_time = get_remaining_time(user_id)
-            
-            if remaining_time > 0:
-                hours = int(remaining_time // 3600)
-                minutes = int((remaining_time % 3600) // 60)
-                message = f"⏰ شما در 12 ساعت گذشته فایل دانلود کرده‌اید!\n"
-                message += f"📊 تعداد دانلود: {download_count}\n"
-                message += f"⏳ زمان باقی‌مانده: {hours} ساعت و {minutes} دقیقه"
-            else:
-                message = f"✅ می‌توانید فایل دانلود کنید!\n"
-                message += f"📊 تعداد دانلود: {download_count}"
-        
-        await update.message.reply_text(message)
-    elif text == "⬅️ بازگشت":
-        await update.message.reply_text("بازگشت به منوی اصلی", reply_markup=main_keyboard(user_id, admins))
-    # حذف فایل با شماره (برای همه کاربران)
-    elif text and text.isdigit():
-        try:
-            file_index = int(text) - 1
-            files = load_files_db()
-            if 0 <= file_index < len(files) and files[file_index]:
-                file_to_delete = files[file_index]
-                file_name = file_to_delete.get('name', file_to_delete.get('id', f'فایل {file_index + 1}'))
-                
-                # حذف فایل از سیستم
-                try:
-                    if file_to_delete.get("path") and os.path.exists(file_to_delete["path"]):
-                        os.remove(file_to_delete["path"])
-                except Exception:
-                    pass
-                
-                # حذف از دیتابیس
-                files.pop(file_index)
-                save_files_db(files)
-                
-                await update.message.reply_text(
-                    f"✅ فایل '{file_name}' با شماره {file_index + 1} حذف شد.",
-                    reply_markup=main_keyboard(user_id, admins)
-                )
-            else:
-                await update.message.reply_text("❌ شماره معتبر وارد کنید.")
-        except ValueError:
-            await update.message.reply_text("❌ شماره معتبر وارد کنید.")
-    elif (user_id == MAIN_ADMIN_ID or user_id in admins) and text not in ["📤 ارسال فایل (فقط ادمین)", "📁 لیست فایل‌ها", "پنل مدیریت ⚙️", "📥 دریافت آخرین فایل", "📊 وضعیت دانلود"]:
-        files = load_files_db()
-        file_id = f"text_{len(files)+1}"
-        files.append({
-            "id": file_id,
-            "type": "text",
-            "name": f"متن {len(files)+1}",
-            "content": text
-        })
-        save_files_db(files)
-        await update.message.reply_text("✅ متن ذخیره شد.")
 
 async def handle_download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -915,19 +892,35 @@ async def handle_download_callback(update: Update, context: ContextTypes.DEFAULT
                 if query.message and query.message.chat:
                     await context.bot.send_message(
                         chat_id=query.message.chat.id,
-                        text="✅ عضویت شما تأیید شد! به ربات خوش آمدید.",
+                        text="✅ عضویت شما تأیید شد! به منوی اصلی بازگشتید.",
                         reply_markup=main_keyboard(user_id, admins)
                     )
+                await query.answer("✅ عضویت شما تأیید شد!", show_alert=True)
+                return
             else:
-                await query.answer("❌ هنوز در کانال‌های اجباری عضو نیستید!", show_alert=True)
+                await query.answer("⏳ در حال بررسی عضویت... لطفاً چند لحظه صبر کنید.", show_alert=True)
+                import asyncio
+                await asyncio.sleep(5)
+                is_member2 = await is_user_member_all(context.bot, user_id, force_channels)
+                if is_member2:
+                    if query.message and query.message.chat:
+                        await context.bot.send_message(
+                            chat_id=query.message.chat.id,
+                            text="✅ عضویت شما تأیید شد! به منوی اصلی بازگشتید.",
+                            reply_markup=main_keyboard(user_id, admins)
+                        )
+                    await query.answer("✅ عضویت شما تأیید شد!", show_alert=True)
+                else:
+                    await query.answer("❌ هنوز در همه کانال‌های اجباری عضو نیستید! (کمی بعد دوباره امتحان کنید)", show_alert=True)
+                return
         else:
             if query.message and query.message.chat:
                 await context.bot.send_message(
                     chat_id=query.message.chat.id,
-                    text="✅ عضویت شما تأیید شد! به ربات خوش آمدید.",
+                    text="✅ عضویت شما تأیید شد! به منوی اصلی بازگشتید.",
                     reply_markup=main_keyboard(user_id, admins)
                 )
-        await query.answer()
+            await query.answer("✅ عضویت شما تأیید شد!", show_alert=True)
         return
     
     if data == "back_to_main":
@@ -1086,14 +1079,32 @@ async def handle_download_callback(update: Update, context: ContextTypes.DEFAULT
 async def is_user_member_all(bot, user_id, channels):
     for ch in channels:
         try:
-            # اگر کانال با @ شروع نشده، اضافه کن
+            orig_ch = ch
             if not ch.startswith('@'):
                 ch = f"@{ch}"
-            member = await bot.get_chat_member(ch, user_id)
-            if member.status in ["left", "kicked"]:
+            print(f"[عضویت اجباری] بررسی کانال: {ch} برای کاربر: {user_id}")
+            
+            # ابتدا بررسی کنیم که کانال وجود دارد
+            try:
+                chat = await bot.get_chat(ch)
+                print(f"[عضویت اجباری] کانال {ch} پیدا شد: {chat.title}")
+            except Exception as chat_error:
+                print(f"[عضویت اجباری] کانال {ch} پیدا نشد: {chat_error}")
                 return False
-        except Exception:
+            
+            # بررسی عضویت کاربر
+            member = await bot.get_chat_member(ch, user_id)
+            print(f"[عضویت اجباری] وضعیت کاربر در {ch}: {member.status}")
+            
+            if member.status in ["left", "kicked"]:
+                print(f"[عضویت اجباری] کاربر عضو {ch} نیست!")
+                return False
+                
+        except Exception as e:
+            print(f"[عضویت اجباری] خطا در بررسی {ch}: {e}")
             return False
+    
+    print(f"[عضویت اجباری] کاربر {user_id} عضو همه کانال‌هاست!")
     return True
 
 async def set_notice(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1137,4 +1148,4 @@ if __name__ == '__main__':
             webhook_url=f"{WEBHOOK_URL}/webhook/{TOKEN}"
         )
     else:
-        app.run_polling() 
+        app.run_polling()
